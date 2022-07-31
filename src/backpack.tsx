@@ -24,14 +24,44 @@ const Backpack = () => {
   const [bm, setBm] = useState<bookmarkItem[]>([]);
   const [bmr, setBmr] = useState<bookmarkItem[]>([]);
   const [favs, setFavs] = useState<bookmarkItem[]>([]);
+  const [readingList, setReadingList] = useState<bookmarkItem[]>([]);
   const [finished, setFinished] = useState<boolean>(false);
+  const [skipVr, setSkipVr] = useState<number | null>(null);
+  const [skipVs, setSkipVs] = useState<number | null>(null);
 
   useEffect(() => {
+    chrome.storage.sync.get(['skipVr'], function (result) {
+      if (!result.skipVr) {
+        chrome.storage.sync.set({ skipVr: 100 }, function () {
+          setSkipVr(100)
+          console.log('Value is set to ' + skipVr);
+        });
+      } else {
+        console.log('Value is set to ' + result.skipVr);
+        setSkipVr(result.skipVr)
+      }
+    });
+
+    chrome.storage.sync.get(['skipVs'], function (result) {
+      if (!result.skipVs) {
+        chrome.storage.sync.set({ skipVs: 100 }, function () {
+          setSkipVs(100)
+          console.log('Value is set to ' + skipVs);
+        });
+      } else {
+        console.log('Value is set to ' + result.skipVs);
+        setSkipVs(result.skipVs)
+      }
+    });
+
     let openProcesses = 0
     function process_bookmark(bookmarks: any): any {
       openProcesses += 1
-      let _: bookmarkItem[] = []
-      let prio: any = []
+
+      let _: bookmarkItem[] = [];
+      let _favs: bookmarkItem[] = [];
+      let _readingList: bookmarkItem[] = [];
+
       for (var i = 0; i < bookmarks.length; i++) {
         var bookmark = bookmarks[i];
         if (bookmark.url) {
@@ -48,7 +78,9 @@ const Backpack = () => {
             folder
           }
           if (["favorites"].includes(item.folder)) {
-            prio.push(item)
+            _favs.push(item)
+          } else if (["reading list"].includes(item.folder)) {
+            _readingList.push(item)
           } else {
             _.push(item)
           }
@@ -59,7 +91,8 @@ const Backpack = () => {
           process_bookmark(bookmark.children);
         }
       }
-      setFavs(prev => [...prev, prio].flat(3))
+      setFavs(prev => [...prev, _favs].flat(3))
+      setReadingList(prev => [...prev, _readingList].flat(3))
       setBm(prev => [...prev, _].flat(3))
       openProcesses -= 1
       //randomise at end
@@ -73,24 +106,27 @@ const Backpack = () => {
   }, []);
 
   const matchesSearch = (e: bookmarkItem) => {
-    console.log(e)
+    if (search === "") return true
+    let match = false;
     const url = e.url;
-
-    // if (typeof f.value === 'string') {
-    //   result = doesStringContainsKeyword(row[name], f.value)
-    //   console.log({ result })
-    // }
-    // e.url.includes(e) || e.title.includes(e) || e.folder.includes(e)
+    const title = e.title;
+    const folder = e.folder;
+    [url,
+      title,
+      folder,].forEach(f => {
+        if (f.includes(search))
+          match = true
+      })
+    console.log(search, e, e.title.includes(search))
+    return match
   }
 
   useEffect(() => {
     if (finished) {
       setBmr(() => [...bm].sort((a, b) => 0.5 - Math.random()))
+      // setReadingList(() => [...readingList].sort((a, b) => 0.5 - Math.random()))
     }
   }, [bm, finished])
-  useEffect(() => {
-    console.log(search)
-  }, [search])
 
   const removeBookmark = (bookmark: bookmarkItem) => {
     const id = bookmark.id.toString();
@@ -118,45 +154,86 @@ const Backpack = () => {
       console.log("cant remove this bookmark", id, error)
     }
   }
-  const today = bm.length ? bm[Math.floor(doy * 123 % bm.length)] : null
+  const ignoreBookmark = (which: string) => {
+    console.log({ which })
+    chrome.storage.sync.get(which, function (result) {
+      console.log({ result })
+      chrome.storage.sync.set({ [which]: result[which] + 1 }, function () {
+        which === "skipVr" ? setSkipVr(result[which] + 1) : setSkipVs(result[which] + 1);
+        console.log('Value is set to ' + result[which] + 1);
+      });
+    })
+  }
+  const today = skipVr && readingList.length ? readingList[Math.floor(doy * skipVr % readingList.length)] : null
+  const sponsor = skipVs && bm.length ? bm[Math.floor(doy * skipVs % bm.length)] : null
 
   return (
-    <div>
-
+    <div className="main">
       <nav>
         <p>BMNN</p>
         <input value={search} onChange={(e) => setSearch(e.target.value)} type="search" name="search" id="search" />
-        <p>links in "favorites" folder are shown first.</p>
-        <p>bookmarks: {bm.length} </p>
-        <p>({bm.filter(e => e.parentId == 1).length} undeletable - put them in a folder)</p>
+        <p className="stats">links in "favorites","reading list" folders are shown first. (total: {bm.length} -  {bm.filter(e => e.parentId == 1).length} undeletable, put them in a folder)</p>
+        <p className="stats"></p>
       </nav>
       <div className="card-container">
-        <div className="card card-title">
-          <h1>Today's Headline {today && <span><a style={{ color: "orange" }} href={today.url}>↗ {today.title}</a>{today && today.parentId != 1 ? <button style={{ display: "inline" }} onClick={() => removeBookmark(today)}>✖</button> : <button disabled onClick={() => removeBookmark(today)}>✖</button>}</span>}</h1>
+        <div className="hero">
+          <div className="card headline">
+            <h1>Today's Headline {today && <span>
+              <a style={{ color: "orange" }} href={today.url}>↗ {today.title}</a>{today && today.parentId != 1 ? <button style={{ display: "inline" }} onClick={() => removeBookmark(today)}>✖</button> : <button onClick={() => chrome.tabs.create({ url: "chrome://bookmarks/?q=" + today.title })}>✖</button>}
+              <span onClick={() => ignoreBookmark("skipVr")}>skip</span>
+            </span>}
+            </h1>
+
+          </div>
+          <div className="card sponsor">
+            <h2>Sponsored: {sponsor && <span>
+              <a style={{ color: "teal" }} href={sponsor.url}>↗ {sponsor.title}</a>{sponsor && sponsor.parentId != 1 ? <button style={{ display: "inline" }} onClick={() => removeBookmark(sponsor)}>✖</button> : <button onClick={() => chrome.tabs.create({ url: "chrome://bookmarks/?q=" + sponsor.title })}>✖</button>}
+              <span onClick={() => ignoreBookmark("skipVs")}>skip</span>
+            </span>}</h2>
+          </div>
         </div>
+        <div className="cards">
 
-        { //@ts-ignore
-          favs.filter(matchesSearch).map((bookmark, i) => (
-            <div key={`el-${bookmark.parentId}-${bookmark.id}`} id={`el-${bookmark.parentId}-${bookmark.id}`} className="card card-favs">
-              <a href={bookmark.url}>
-                ↗ {bookmark.title} <br />
-                <span> <span className="card-folder">{bookmark.folder}</span> <span className="card-link">{bookmark.url}</span> </span>
-              </a>
-              {bookmark.parentId != 1 ? <button onClick={() => removeBookmark(bookmark)}>✖</button> : ""}
-            </div>))
-        }
+          { //@ts-ignore
+            favs.filter(matchesSearch).map((bookmark, i) => (
+              <div key={`el-${bookmark.parentId}-${bookmark.id}`} id={`el-${bookmark.parentId}-${bookmark.id}`} className="card card-favs">
+                <a href={bookmark.url}>
+                  ↗ {bookmark.title} <br />
+                  <span >
+                    <span className="card-folder">{bookmark.folder}</span> <span className="card-link">{bookmark.url}</span>
+                  </span>
+                </a>
+                {bookmark.parentId != 1 ? <button onClick={() => removeBookmark(bookmark)}>✖</button> : ""}
+              </div>))
+          }
+
+          { //@ts-ignore
+            readingList.filter(matchesSearch).map((bookmark, i) => (
+              <div key={`el-${bookmark.parentId}-${bookmark.id}`} id={`el-${bookmark.parentId}-${bookmark.id}`} className="card card-reading-list">
+                <a href={bookmark.url}>
+                  ↗ {bookmark.title} <br />
+                  <span >
+                    <span className="card-folder">{bookmark.folder}</span> <span className="card-link">{bookmark.url}</span>
+                  </span>
+                </a>
+                {bookmark.parentId != 1 ? <button onClick={() => removeBookmark(bookmark)}>✖</button> : ""}
+              </div>))
+          }
 
 
-        { //@ts-ignore
-          bmr.filter(e => search === "" || e.url.includes(e) || e.title.includes(e) || e.folder.includes(e)).map((bookmark) => (
-            <div key={`el-${bookmark.parentId}-${bookmark.id}`} id={`el-${bookmark.parentId}-${bookmark.id}`} className="card">
-              <a href={bookmark.url}>
-                ↗ {bookmark.title} <br />
-                <span> <span className="card-folder">{bookmark.folder}</span> <span className="card-link">{bookmark.url}</span> </span>
-              </a>
-              {bookmark.parentId != 1 ? <button onClick={() => removeBookmark(bookmark)}>✖</button> : <button disabled onClick={() => removeBookmark(bookmark)}>✖</button>}
-            </div>))
-        }
+          { //@ts-ignore
+            bmr.filter(matchesSearch).map((bookmark) => (
+              <div key={`el-${bookmark.parentId}-${bookmark.id}`} id={`el-${bookmark.parentId}-${bookmark.id}`} className="card">
+                <a href={bookmark.url}>
+                  ↗ {bookmark.title} <br />
+                  <span >
+                    <span className="card-folder">{bookmark.folder}</span> <span className="card-link">{bookmark.url}</span>
+                  </span>
+                </a>
+                {bookmark.parentId != 1 ? <button onClick={() => removeBookmark(bookmark)}>✖</button> : <button onClick={() => chrome.tabs.create({ url: "chrome://bookmarks/?q=" + bookmark.title })}>✖</button>}
+              </div>))
+          }
+        </div>
       </div>
     </div>
   );
